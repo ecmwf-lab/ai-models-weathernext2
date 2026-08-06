@@ -51,6 +51,3 @@ weathernext-cyclones = "ai_models_weathernext2.model:WeatherNextCyclones_2025"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.uv.sources]
-ai-models = { path = "../ai-models" }
