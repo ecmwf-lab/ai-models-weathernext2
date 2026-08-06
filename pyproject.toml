@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-models-weathernext2"
+version = "0.1.0"
+description = "An ai-models plugin to run Deepmind's WeatherNext 2 and WeatherNext Cyclones models"
+keywords = ["ai", "weather", "forecasting"]
+
+authors = [
+  { name = "European Centre for Medium-Range Weather Forecasts (ECMWF)", email = "software.support@ecmwf.int" },
+]
+
+requires-python = ">=3.12"
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+
+dependencies = [
+  "ai-models>=0.4.0",
+  "weathernext @ git+https://github.com/google-deepmind/weathernext.git@v0.3.0",
+  "dm-tree",
+  "dm-haiku",
+]
+
+[project.optional-dependencies]
+cyclones = [
+  "cyclops @ git+https://github.com/ecmwf/cyclops.git",
+]
+
+[project.entry-points."ai_models.model"]
+weathernext2 = "ai_models_weathernext2.model:WeatherNext2_2025"
+"weathernext2-2025" = "ai_models_weathernext2.model:WeatherNext2_2025"
+weathernext-cyclones = "ai_models_weathernext2.model:WeatherNextCyclones_2025"
+"weathernext-cyclones-2025" = "ai_models_weathernext2.model:WeatherNextCyclones_2025"
+"weathernext-cyclones-2024" = "ai_models_weathernext2.model:WeatherNextCyclones_2024"
+"weathernext-cyclones-2023" = "ai_models_weathernext2.model:WeatherNextCyclones_2023"
+"weathernext-cyclones-mini" = "ai_models_weathernext2.model:WeatherNextCyclonesMini_2024"
+"weathernext-cyclones-mini-2024" = "ai_models_weathernext2.model:WeatherNextCyclonesMini_2024"
+"weathernext-cyclones-mini-2023" = "ai_models_weathernext2.model:WeatherNextCyclonesMini_2023"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+ai-models = { path = "../ai-models" }
