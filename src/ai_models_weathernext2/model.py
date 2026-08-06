@@ -268,7 +268,8 @@ class WeatherNext2Base(Model):
         accumulate_cyclones = (
             bool(getattr(self, "cyclone_tracks", None)) and cyclone_vars
         )
-        cyclone_chunks = [] if accumulate_cyclones else None
+        # Per-member accumulation: {member_number: [(time_step, ds), ...]}
+        cyclone_chunks_by_member = {} if accumulate_cyclones else None
 
         with stepper:
             with warnings.catch_warnings():
@@ -292,7 +293,7 @@ class WeatherNext2Base(Model):
                         ensemble_chunk : ensemble_chunk + samples_per_chunk
                     ]
 
-                    # Accumulate cyclone fields before saving GRIB
+                    # Accumulate cyclone fields per member before saving GRIB
                     if accumulate_cyclones:
                         # Keep cyclone vars plus lat/lon coords
                         cyclone_ds = chunk[cyclone_vars].compute()
@@ -302,7 +303,12 @@ class WeatherNext2Base(Model):
                                 cyclone_ds = cyclone_ds.assign_coords(
                                     {coord: chunk.coords[coord]}
                                 )
-                        cyclone_chunks.append((time_step, cyclone_ds))
+                        for member in member_number_subset:
+                            if member not in cyclone_chunks_by_member:
+                                cyclone_chunks_by_member[member] = []
+                            cyclone_chunks_by_member[member].append(
+                                (time_step, cyclone_ds)
+                            )
 
                     save_output_xarray(
                         output=chunk,
@@ -321,61 +327,83 @@ class WeatherNext2Base(Model):
                         stepper(i, time_step * self.hour_steps)
 
         # Run cyclone tracker and write tracks
-        if accumulate_cyclones and cyclone_chunks:
-            self._run_cyclone_tracker(cyclone_chunks)
+        if accumulate_cyclones and cyclone_chunks_by_member:
+            self._run_cyclone_tracker(cyclone_chunks_by_member)
 
-    def _run_cyclone_tracker(self, cyclone_chunks):
-        """Run DirectTracker on accumulated cyclone fields and write to TAR."""
+    def _run_cyclone_tracker(self, cyclone_chunks_by_member):
+        """Run DirectTracker on accumulated cyclone fields and write to TAR.
+
+        Tracks each ensemble member separately and writes all to one TAR.
+        """
         import xarray as xr
 
-        from .cyclones import run_tracker
-        from .cyclones import tracks_to_cyclops
-        from .cyclones import write_cyclops_tarfile
+        from .cyclones import run_tracker, tracks_to_cyclops, write_cyclops_tarfile
 
         with self.timer("Running cyclone tracker"):
-            # Build a single xarray with time dimension from chunks
             import pandas as pd
 
-            datasets = []
-            for time_step, ds in cyclone_chunks:
-                lead_td = pd.Timedelta(hours=time_step * self.hour_steps)
-                ds = ds.assign_coords(time=[lead_td])
-                datasets.append(ds)
+            all_trackfiles = {}  # basin -> list of TrackFile
 
-            predictions = xr.concat(datasets, dim="time")
-            # Drop batch dimension (tracker expects time, lat, lon)
-            if "batch" in predictions.dims:
-                predictions = predictions.isel(batch=0, drop=True)
-            # Add lead_time as a coordinate (tracker uses it internally)
-            predictions = predictions.assign_coords(
-                lead_time=("time", predictions.time.values)
-            )
-            # Drop sample coord that leaked from the rollout
-            if "sample" in predictions.coords:
-                predictions = predictions.drop_vars("sample")
+            for member, chunks in cyclone_chunks_by_member.items():
+                # Build xarray with time dimension for this member
+                datasets = []
+                for time_step, ds in chunks:
+                    lead_td = pd.Timedelta(hours=time_step * self.hour_steps)
+                    ds = ds.assign_coords(time=[lead_td])
+                    datasets.append(ds)
 
-            # Run the tracker
-            tracks_df = run_tracker(predictions, init_time=self.start_datetime)
+                predictions = xr.concat(datasets, dim="time")
+                if "batch" in predictions.dims:
+                    predictions = predictions.isel(batch=0, drop=True)
+                predictions = predictions.assign_coords(
+                    lead_time=("time", predictions.time.values)
+                )
+                if "sample" in predictions.coords:
+                    predictions = predictions.drop_vars("sample")
 
-            if tracks_df.empty:
-                LOG.info("No cyclone tracks found")
+                # Run the tracker for this member
+                tracks_df = run_tracker(predictions, init_time=self.start_datetime)
+
+                if tracks_df.empty:
+                    LOG.info("Member %d: no cyclone tracks found", member)
+                    continue
+
+                # Convert to cyclops format
+                member_trackfiles = tracks_to_cyclops(
+                    tracks_df,
+                    init_time=self.start_datetime,
+                    member=member,
+                    fclen=self.lead_time,
+                )
+
+                # Merge into all_trackfiles
+                for basin, tf in member_trackfiles.items():
+                    if basin not in all_trackfiles:
+                        all_trackfiles[basin] = []
+                    all_trackfiles[basin].append(tf)
+
+            if not all_trackfiles:
+                LOG.info("No cyclone tracks found across any member")
                 return
 
-            # Convert to cyclops format
-            trackfiles = tracks_to_cyclops(
-                tracks_df,
-                init_time=self.start_datetime,
-                member=self.member_number[0] if len(self.member_number) == 1 else 0,
-                fclen=self.lead_time,
+            # Flatten: write all TrackFiles to one TAR
+            all_tfs = [tf for tfs in all_trackfiles.values() for tf in tfs]
+
+            output_path = self.cyclone_tracks
+            is_deterministic = self.grib_extra_metadata.get("type") == "fc"
+            hres_member = self.member_number[0] if is_deterministic else None
+            write_cyclops_tarfile(
+                {f"{tf.basin.name}_{tf.number}": tf for tf in all_tfs},
+                output_path,
+                hres=hres_member,
             )
 
-            # Write TAR file
-            output_path = self.cyclone_tracks
-            write_cyclops_tarfile(trackfiles, output_path)
+            total_tracks = sum(len(tf.tracks) for tf in all_tfs)
             LOG.info(
-                "Wrote %d tracks across %d basins to %s",
-                sum(len(tf.tracks) for tf in trackfiles.values()),
-                len(trackfiles),
+                "Wrote %d tracks (%d members, %d basins) to %s",
+                total_tracks,
+                len(cyclone_chunks_by_member),
+                len(all_trackfiles),
                 output_path,
             )
 

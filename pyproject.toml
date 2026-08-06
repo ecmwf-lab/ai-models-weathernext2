@@ -28,6 +28,7 @@ classifiers = [
 
 dependencies = [
   "ai-models>=0.4.0",
+  "numpy>=2.0",
   "weathernext @ git+https://github.com/google-deepmind/weathernext.git@v0.3.0",
   "dm-tree",
   "dm-haiku",
