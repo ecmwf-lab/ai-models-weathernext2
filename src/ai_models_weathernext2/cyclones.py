@@ -131,13 +131,6 @@ def run_tracker(
     if "init_time" not in predictions.coords:
         predictions = predictions.assign_coords(init_time=pd.Timestamp(init_time))
 
-    # The tracker requires initial_storms_df to be a DataFrame (not None)
-    # with at minimum a 'lead_time' column
-    if initial_storms_df is None:
-        from weathernext.cyclones import constants as wn_constants
-
-        initial_storms_df = pd.DataFrame(columns=[wn_constants.LEAD_TIME, wn_constants.TRACK_ID])
-
     # Preprocess gridded data into the format expected by the tracker
     processed = tracker.preprocess_gridded_ds(predictions)
 
@@ -148,7 +141,8 @@ def run_tracker(
         )
     except (KeyError, IndexError, ValueError) as e:
         LOG.warning(
-            "Cyclone tracker failed (may need longer lead time for " "cyclogenesis detection, minimum 2.5 days): %s",
+            "Cyclone tracker failed (may need longer lead time for "
+            "cyclogenesis detection, minimum 2.5 days): %s",
             e,
         )
         return pd.DataFrame()
@@ -203,7 +197,9 @@ def tracks_to_cyclops(
     basin_tracks = {}  # basin_name -> list of Track
 
     for track_id in track_ids:
-        track_rows = tracks_df[tracks_df[WN_TRACK_ID] == track_id].sort_values(WN_LEAD_TIME)
+        track_rows = tracks_df[tracks_df[WN_TRACK_ID] == track_id].sort_values(
+            WN_LEAD_TIME
+        )
 
         points = []
         max_wind_overall = 0.0
@@ -227,7 +223,9 @@ def tracks_to_cyclops(
             for i, radii_row in enumerate(WN_RADII_COLUMNS):
                 for j, col in enumerate(radii_row):
                     if col in row.index and not pd.isna(row[col]):
-                        wind_radii[i, j] = int(round(max(0.0, float(row[col])) * KM_TO_NMI))
+                        wind_radii[i, j] = int(
+                            round(max(0.0, float(row[col])) * KM_TO_NMI)
+                        )
 
             points.append(
                 Point(
