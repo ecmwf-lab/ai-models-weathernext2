@@ -169,3 +169,8 @@ cython_debug/
 *.pny
 _version.py
 uv.lock
+
+# Test outputs
+*.tar
+*.grib
+UPSTREAM_ISSUE_TRACKER.md
