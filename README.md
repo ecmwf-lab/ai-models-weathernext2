@@ -3,7 +3,7 @@
 
 `ai-models-weathernext2` is an [ai-models](https://github.com/ecmwf-lab/ai-models) plugin to run Google DeepMind's [WeatherNext 2](https://github.com/google-deepmind/weathernext) and WeatherNext Cyclones models.
 
-WeatherNext 2: Accurate and Efficient Global Weather Forecasting with a Functional Generative Network, arXiv preprint, 2025. https://arxiv.org/abs/2505.02651
+WeatherNext 2: Accurate and Efficient Global Weather Forecasting with a Functional Generative Network, Nature, 2026. https://www.nature.com/articles/s41586-026-10953-2
 
 The model weights are made available for use under the terms of the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0). You may obtain a copy of the License at: https://creativecommons.org/licenses/by-nc-sa/4.0/.
 
