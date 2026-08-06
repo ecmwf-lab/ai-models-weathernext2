@@ -129,7 +129,7 @@ def run_tracker(
 
     # Ensure init_time is set as a coordinate
     if "init_time" not in predictions.coords:
-        predictions = predictions.assign_coords(init_time=np.datetime64(init_time))
+        predictions = predictions.assign_coords(init_time=pd.Timestamp(init_time))
 
     # The tracker requires initial_storms_df to be a DataFrame (not None)
     # with at minimum a 'lead_time' column
