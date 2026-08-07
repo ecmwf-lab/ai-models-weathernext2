@@ -62,8 +62,42 @@ With these approaches it is possible to create either a single forecast, many en
 
 ## Cyclone tracking
 
-When using the cyclone models (`weathernext-cyclones*`), the model outputs gridded cyclone fields (existence probability, wind speed, pressure, wind radii). The built-in WeatherNext `DirectTracker` can be used to convert these gridded fields into track DataFrames, which can then be exported to cyclops format for use in ECMWF workflows.
+When using the cyclone models (`weathernext-cyclones*`), the model predicts gridded cyclone fields (existence probability, wind speed, pressure, wind radii) alongside standard meteorological variables. These gridded fields can be converted into tropical cyclone tracks using WeatherNext's built-in `DirectTracker`.
+
+### Command line
+
+Use `--cyclone-tracks` to run the tracker and write output in [cyclops](https://github.com/ecmwf/cyclops) TAR format:
+
+```bash
+ai-models weathernext-cyclones --lead-time 240 --cyclone-tracks tracks.tar
+```
+
+The tracker requires at least 2.5 days of forecast data to detect cyclogenesis. For deterministic runs the tracks are tagged as `da` (HRES); for ensemble runs each member is tracked separately and tagged `001`, `002`, etc.
+
+Output files follow the cyclops naming convention:
+```
+{expver}{basetime}_{member}_{fclen}_{basin}
+```
+
+### Python API
 
 ```python
-from ai_models_weathernext2.cyclones import run_tracker, tracks_to_cyclops
+from ai_models_weathernext2.cyclones import run_tracker, tracks_to_cyclops, write_cyclops_tarfile
+
+# Run tracker on gridded cyclone predictions (xarray Dataset with time, lat, lon)
+tracks_df = run_tracker(predictions, init_time=datetime(2026, 8, 6))
+
+# Convert to cyclops TrackFile objects grouped by basin
+trackfiles = tracks_to_cyclops(tracks_df, init_time=datetime(2026, 8, 6), member=0, fclen=240)
+
+# Write to TAR archive
+write_cyclops_tarfile(trackfiles, "tracks.tar", hres=0)
+```
+
+### Requirements
+
+Cyclone tracking requires the `cyclops` optional dependency:
+
+```bash
+pip install ai-models-weathernext2[cyclones]
 ```
