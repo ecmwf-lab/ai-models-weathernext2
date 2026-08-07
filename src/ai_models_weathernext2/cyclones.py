@@ -127,128 +127,34 @@ def run_tracker(
     config = get_config()
     tracker = config.tracker_constructor(**config.tracker_kwargs)
 
-    # Ensure init_time is set as a coordinate
-    if "init_time" not in predictions.coords:
-        predictions = predictions.assign_coords(init_time=pd.Timestamp(init_time))
-
-    # Monkey-patch the tracker to fix upstream bugs:
-    # 1. Empty DataFrame needs columns when initial_storms_df=None
-    # 2. _get_cyclogenesis_candidates uses vectorized isel on stacked dims
-    #    which is unsupported in xarray >= 2024
-    import weathernext.cyclones.constants as _c
-
-    _original_call_unbound = tracker.__class__.__call__
-
-    def _patched_call(self, gridded_ds, initial_storms_df=None, **kwargs):
-        if initial_storms_df is None:
-            initial_storms_df = pd.DataFrame(
-                columns=[_c.LEAD_TIME, _c.TRACK_ID, _c.LAT, _c.LON]
-            )
-        return _original_call_unbound(
-            self, gridded_ds, initial_storms_df=initial_storms_df, **kwargs
-        )
-
-    tracker.__class__.__call__ = _patched_call
-
-    def _patched_get_cyclogenesis_candidates(self, gridded_predictions):
-        """Patched: avoids vectorized isel on stacked dims (xarray 2024+)."""
-        import xarray as xr
-
-        prob_var = self.probability_cyclone_exists_variable_name
-        prob_da = gridded_predictions[prob_var]
-
-        lat_size = prob_da.lat.size
-        lon_size = prob_da.lon.size
-        lat_range = (prob_da.lat.max() - prob_da.lat.min()).data.item()
-        lon_range = (prob_da.lon.max() - prob_da.lon.min()).data.item()
-        wsz_lat = max(
-            1, round(self.cyclogenesis_box_side_degrees / lat_range * lat_size)
-        )
-        wsz_lon = max(
-            1, round(self.cyclogenesis_box_side_degrees / lon_range * lon_size)
-        )
-
-        all_lats = prob_da.lat.values
-        all_lons = prob_da.lon.values
-        vals = prob_da.values  # (lat, lon)
-
-        # Tile into windows and find max per window
-        n_wlat = int(np.ceil(lat_size / wsz_lat))
-        n_wlon = int(np.ceil(lon_size / wsz_lon))
-
-        candidate_lats = []
-        candidate_lons = []
-        candidate_probs = []
-
-        for wi_lat in range(n_wlat):
-            for wi_lon in range(n_wlon):
-                lat_start = wi_lat * wsz_lat
-                lon_start = wi_lon * wsz_lon
-                lat_end = min(lat_start + wsz_lat, lat_size)
-                lon_end = min(lon_start + wsz_lon, lon_size)
-
-                window = vals[lat_start:lat_end, lon_start:lon_end]
-                if window.size == 0:
-                    continue
-
-                max_val = np.nanmax(window)
-                if (
-                    np.isnan(max_val)
-                    or max_val <= self.cyclogenesis_min_max_probability_threshold
-                ):
-                    continue
-
-                # Find location of max within window
-                flat_idx = np.nanargmax(window)
-                local_lat, local_lon = np.unravel_index(flat_idx, window.shape)
-
-                candidate_lats.append(all_lats[lat_start + local_lat])
-                candidate_lons.append(all_lons[lon_start + local_lon])
-                candidate_probs.append(max_val)
-
-        if not candidate_probs:
-            return xr.Dataset(
-                {prob_var: ("window_idx", np.array([], dtype=np.float32))},
-                coords={
-                    "lat": ("window_idx", np.array([], dtype=np.float64)),
-                    "lon": ("window_idx", np.array([], dtype=np.float64)),
-                },
-            )
-
-        # Sort by probability descending
-        order = np.argsort(candidate_probs)[::-1]
-        return xr.Dataset(
-            {
-                prob_var: (
-                    "window_idx",
-                    np.array(candidate_probs, dtype=np.float32)[order],
-                )
-            },
-            coords={
-                "lat": ("window_idx", np.array(candidate_lats)[order]),
-                "lon": ("window_idx", np.array(candidate_lons)[order]),
-            },
-        )
-
-    tracker.__class__._get_cyclogenesis_candidates = (
-        _patched_get_cyclogenesis_candidates
+    # Prepare data in the format the tracker expects (following the demo notebook)
+    data_to_track = tracker.preprocess_gridded_ds(predictions)
+    data_to_track = data_to_track.expand_dims(
+        forecast_datetime=[np.datetime64(init_time)]
     )
-
-    # Preprocess gridded data into the format expected by the tracker
-    processed = tracker.preprocess_gridded_ds(predictions)
+    data_to_track = data_to_track.assign_coords(
+        lead_time_secs=data_to_track.time.astype("timedelta64[s]").astype(int)
+    )
+    data_to_track = data_to_track.assign_coords(
+        date_time=data_to_track.forecast_datetime.data + data_to_track.time
+    )
+    data_to_track = data_to_track.as_numpy()
 
     try:
         tracks_df = tracker(
-            gridded_ds=processed,
+            gridded_ds=data_to_track,
             initial_storms_df=initial_storms_df,
+            do_cyclogenesis=True,
         )
     except (KeyError, IndexError, ValueError) as e:
         LOG.warning(
-            "Cyclone tracker failed (may need longer lead time for "
-            "cyclogenesis detection, minimum 2.5 days): %s",
+            "Cyclone tracker failed: %s",
             e,
         )
         return pd.DataFrame()
+
+    # Wrap longitudes to [0, 360) to match grid convention
+    tracks_df[WN_LON] = tracks_df[WN_LON] % 360
 
     LOG.info(
         "Tracked %d points across %d storms",

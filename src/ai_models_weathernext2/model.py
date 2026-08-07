@@ -99,27 +99,25 @@ class WeatherNext2Base(Model):
             self.grib_extra_metadata["stream"] = "enfo"
 
     @staticmethod
-    def _patch_attention_type(config):
-        """Replace splash_mha with mha in the config for GPU/CPU compatibility."""
-        predictor_kwargs = config.predictor_kwargs
-        noisy_kwargs = predictor_kwargs.get("noisy_function_kwargs", {})
-        mesh_ctor = noisy_kwargs.get("mesh_model_ctor")
-        if mesh_ctor is not None and hasattr(mesh_ctor, "keywords"):
-            transformer_kwargs = mesh_ctor.keywords.get("transformer_kwargs", {})
-            if transformer_kwargs.get("attention_type") == "splash_mha":
-                transformer_kwargs["attention_type"] = "mha"
-                LOG.info(
-                    "Patched attention_type from splash_mha to mha "
-                    "(splash_mha is TPU-only)"
-                )
+    def _patch_for_gpu(config):
+        """Patch config for GPU: switch attention and tune block sizes."""
+        transformer_kwargs = config.predictor_kwargs["noisy_function_kwargs"][
+            "mesh_model_ctor"
+        ].keywords["transformer_kwargs"]
+        if transformer_kwargs.get("attention_type") == "splash_mha":
+            transformer_kwargs["attention_type"] = "triblockdiag_mha"
+            LOG.info(
+                "Patched attention_type from splash_mha to triblockdiag_mha "
+                "(splash_mha is TPU-only)"
+            )
 
     def load_model(self):
         with self.timer(f"Loading config {self.config_name}"):
             self.config = fiddle_config_io.get_fiddle_config_by_name(self.config_name)
 
-            # Splash Attention is TPU-only; fall back to standard MHA on GPU/CPU
+            # Splash Attention is TPU-only; use triblockdiag_mha on GPU/CPU
             if jax.default_backend() != "tpu":
-                self._patch_attention_type(self.config)
+                self._patch_for_gpu(self.config)
 
         with self.timer(f"Loading checkpoint {self.download_files[0]}"):
             checkpoint_path = os.path.join(self.assets, self.download_files[0])
@@ -131,14 +129,23 @@ class WeatherNext2Base(Model):
             LOG.info("Model license: %s", self.ckpt.license)
 
         with self.timer("Building JAX model"):
-            config = self.config
+            # Remove ensemble wrapper for inference -- ensemble members are
+            # handled via separate forward passes with different RNG keys
+            config_inference = fgn.PredictorConfig(
+                task=self.config.task,
+                predictor_constructor=self.config.predictor_constructor,
+                predictor_kwargs=self.config.predictor_kwargs,
+                predictor_wrappers=self.config.predictor_wrappers[:-1],
+            )
 
             @hk.transform
             def run_forward(inputs, targets_template, forcings):
-                predictor = fgn.construct_predictor(config)
-                return predictor(inputs, targets_template, forcings)
+                predictor = fgn.construct_predictor(config_inference)
+                return predictor(
+                    inputs, targets_template=targets_template, forcings=forcings
+                )
 
-            jitted_fn = jax.jit(
+            run_forward_jitted = jax.jit(
                 lambda rng, inputs, targets_template, forcings: run_forward.apply(
                     self.params, rng, inputs, targets_template, forcings
                 )
@@ -146,22 +153,10 @@ class WeatherNext2Base(Model):
 
             num_devices = len(jax.local_devices())
             if num_devices > 1:
-                self.model = xarray_jax.pmap(jitted_fn, dim="sample")
+                self.model = xarray_jax.pmap(run_forward_jitted, dim="sample")
                 self._pmap_devices = jax.local_devices()
             else:
-                # Wrap to drop 'sample' dim from output; the rollout code
-                # manages 'sample' itself and conflicts with any existing one
-                def _drop_sample_wrapper(rng, inputs, targets_template, forcings):
-                    result = jitted_fn(rng, inputs, targets_template, forcings)
-                    if "sample" in result.dims:
-                        # FGN may output multiple samples; select the first
-                        result = result.isel(sample=0, drop=True)
-                    to_drop = [c for c in ("sample", "_batch") if c in result.coords]
-                    if to_drop:
-                        result = result.drop_vars(to_drop)
-                    return result
-
-                self.model = _drop_sample_wrapper
+                self.model = run_forward_jitted
                 self._pmap_devices = None
 
     def run(self):
@@ -355,9 +350,6 @@ class WeatherNext2Base(Model):
                 predictions = xr.concat(datasets, dim="time")
                 if "batch" in predictions.dims:
                     predictions = predictions.isel(batch=0, drop=True)
-                predictions = predictions.assign_coords(
-                    lead_time=("time", predictions.time.values)
-                )
                 if "sample" in predictions.coords:
                     predictions = predictions.drop_vars("sample")
 
