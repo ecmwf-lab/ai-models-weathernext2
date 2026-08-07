@@ -129,15 +129,9 @@ def run_tracker(
 
     # Prepare data in the format the tracker expects (following the demo notebook)
     data_to_track = tracker.preprocess_gridded_ds(predictions)
-    data_to_track = data_to_track.expand_dims(
-        forecast_datetime=[np.datetime64(init_time)]
-    )
-    data_to_track = data_to_track.assign_coords(
-        lead_time_secs=data_to_track.time.astype("timedelta64[s]").astype(int)
-    )
-    data_to_track = data_to_track.assign_coords(
-        date_time=data_to_track.forecast_datetime.data + data_to_track.time
-    )
+    data_to_track = data_to_track.expand_dims(forecast_datetime=[np.datetime64(init_time)])
+    data_to_track = data_to_track.assign_coords(lead_time_secs=data_to_track.time.astype("timedelta64[s]").astype(int))
+    data_to_track = data_to_track.assign_coords(date_time=data_to_track.forecast_datetime.data + data_to_track.time)
     data_to_track = data_to_track.as_numpy()
 
     # When no initial storms, the tracker internally creates pd.DataFrame()
@@ -146,9 +140,7 @@ def run_tracker(
     if initial_storms_df is None:
         from weathernext.cyclones import constants as _c
 
-        initial_storms_df = pd.DataFrame(
-            columns=[_c.LEAD_TIME, _c.TRACK_ID, _c.LAT, _c.LON]
-        )
+        initial_storms_df = pd.DataFrame(columns=[_c.LEAD_TIME, _c.TRACK_ID, _c.LAT, _c.LON])
 
     try:
         tracks_df = tracker(
@@ -216,9 +208,7 @@ def tracks_to_cyclops(
     basin_tracks = {}  # basin_name -> list of Track
 
     for track_id in track_ids:
-        track_rows = tracks_df[tracks_df[WN_TRACK_ID] == track_id].sort_values(
-            WN_LEAD_TIME
-        )
+        track_rows = tracks_df[tracks_df[WN_TRACK_ID] == track_id].sort_values(WN_LEAD_TIME)
 
         points = []
         max_wind_overall = 0.0
@@ -242,9 +232,7 @@ def tracks_to_cyclops(
             for i, radii_row in enumerate(WN_RADII_COLUMNS):
                 for j, col in enumerate(radii_row):
                     if col in row.index and not pd.isna(row[col]):
-                        wind_radii[i, j] = int(
-                            round(max(0.0, float(row[col])) * KM_TO_NMI)
-                        )
+                        wind_radii[i, j] = int(round(max(0.0, float(row[col])) * KM_TO_NMI))
 
             points.append(
                 Point(

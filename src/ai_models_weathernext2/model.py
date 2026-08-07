@@ -72,9 +72,7 @@ class WeatherNext2Base(Model):
         self.lagged = [-6, 0]
         self.params = None
         self.ordering = self.param_sfc + [
-            f"{param}{level}"
-            for param in self.param_level_pl[0]
-            for level in self.param_level_pl[1]
+            f"{param}{level}" for param in self.param_level_pl[0] for level in self.param_level_pl[1]
         ]
 
         # Handle ensemble members (same pattern as GenCast)
@@ -85,9 +83,7 @@ class WeatherNext2Base(Model):
         elif self.member_number is None:
             self.member_number = list(range(1, self.num_ensemble_members + 1))
         else:
-            raise TypeError(
-                f"`member_number` must be a string or int, not {type(self.member_number)}"
-            )
+            raise TypeError(f"`member_number` must be a string or int, not {type(self.member_number)}")
 
         if not len(self.member_number) == self.num_ensemble_members:
             raise ValueError(
@@ -101,15 +97,12 @@ class WeatherNext2Base(Model):
     @staticmethod
     def _patch_for_gpu(config):
         """Patch config for GPU: switch attention and tune block sizes."""
-        transformer_kwargs = config.predictor_kwargs["noisy_function_kwargs"][
-            "mesh_model_ctor"
-        ].keywords["transformer_kwargs"]
+        transformer_kwargs = config.predictor_kwargs["noisy_function_kwargs"]["mesh_model_ctor"].keywords[
+            "transformer_kwargs"
+        ]
         if transformer_kwargs.get("attention_type") == "splash_mha":
             transformer_kwargs["attention_type"] = "triblockdiag_mha"
-            LOG.info(
-                "Patched attention_type from splash_mha to triblockdiag_mha "
-                "(splash_mha is TPU-only)"
-            )
+            LOG.info("Patched attention_type from splash_mha to triblockdiag_mha " "(splash_mha is TPU-only)")
 
     def load_model(self):
         with self.timer(f"Loading config {self.config_name}"):
@@ -141,9 +134,7 @@ class WeatherNext2Base(Model):
             @hk.transform
             def run_forward(inputs, targets_template, forcings):
                 predictor = fgn.construct_predictor(config_inference)
-                return predictor(
-                    inputs, targets_template=targets_template, forcings=forcings
-                )
+                return predictor(inputs, targets_template=targets_template, forcings=forcings)
 
             run_forward_jitted = jax.jit(
                 lambda rng, inputs, targets_template, forcings: run_forward.apply(
@@ -203,9 +194,7 @@ class WeatherNext2Base(Model):
             # fields) that the model predicts but are not present in input data
             with self.timer("Adding target placeholders"):
                 task_config = self.config.task
-                all_needed = set(task_config.target_variables) | set(
-                    task_config.forcing_variables
-                )
+                all_needed = set(task_config.target_variables) | set(task_config.forcing_variables)
                 missing = all_needed - set(training_xarray.data_vars)
                 if missing:
                     import xarray as xr
@@ -230,22 +219,17 @@ class WeatherNext2Base(Model):
 
             with self.timer("Extracting inputs/targets/forcings"):
                 task_config = self.config.task
-                (input_xr, template, forcings) = (
-                    data_utils.extract_inputs_targets_forcings(
-                        training_xarray,
-                        target_lead_times=[
-                            f"{int(delta.days * 24 + delta.seconds / 3600):d}h"
-                            for delta in time_deltas[len(self.lagged) :]
-                        ],
-                        **dataclasses.asdict(task_config),
-                    )
+                (input_xr, template, forcings) = data_utils.extract_inputs_targets_forcings(
+                    training_xarray,
+                    target_lead_times=[
+                        f"{int(delta.days * 24 + delta.seconds / 3600):d}h" for delta in time_deltas[len(self.lagged) :]
+                    ],
+                    **dataclasses.asdict(task_config),
                 )
 
         # Generate random seeds for ensemble members
         rng = jax.random.PRNGKey(0)
-        rngs = np.stack(
-            [jax.random.fold_in(rng, i) for i in self.member_number], axis=0
-        )
+        rngs = np.stack([jax.random.fold_in(rng, i) for i in self.member_number], axis=0)
 
         # Run chunked prediction
         from contextlib import nullcontext
@@ -257,12 +241,8 @@ class WeatherNext2Base(Model):
             stepper = self.stepper(self.hour_steps)
 
         # Accumulate cyclone fields for tracking if requested
-        cyclone_vars = [
-            v for v in task_config.target_variables if v.startswith("cyclone_")
-        ]
-        accumulate_cyclones = (
-            bool(getattr(self, "cyclone_tracks", None)) and cyclone_vars
-        )
+        cyclone_vars = [v for v in task_config.target_variables if v.startswith("cyclone_")]
+        accumulate_cyclones = bool(getattr(self, "cyclone_tracks", None)) and cyclone_vars
         # Per-member accumulation: {member_number: [(time_step, ds), ...]}
         cyclone_chunks_by_member = {} if accumulate_cyclones else None
 
@@ -284,9 +264,7 @@ class WeatherNext2Base(Model):
                     num_steps = math.ceil(self.lead_time / self.hour_steps)
                     time_step = (i % num_steps) + 1
                     ensemble_chunk = (i // num_steps) * samples_per_chunk
-                    member_number_subset = self.member_number[
-                        ensemble_chunk : ensemble_chunk + samples_per_chunk
-                    ]
+                    member_number_subset = self.member_number[ensemble_chunk : ensemble_chunk + samples_per_chunk]
 
                     # Accumulate cyclone fields per member before saving GRIB
                     if accumulate_cyclones:
@@ -295,15 +273,11 @@ class WeatherNext2Base(Model):
                         # Ensure lat/lon are present as coordinates
                         for coord in ("lat", "lon"):
                             if coord in chunk.coords and coord not in cyclone_ds.coords:
-                                cyclone_ds = cyclone_ds.assign_coords(
-                                    {coord: chunk.coords[coord]}
-                                )
+                                cyclone_ds = cyclone_ds.assign_coords({coord: chunk.coords[coord]})
                         for member in member_number_subset:
                             if member not in cyclone_chunks_by_member:
                                 cyclone_chunks_by_member[member] = []
-                            cyclone_chunks_by_member[member].append(
-                                (time_step, cyclone_ds)
-                            )
+                            cyclone_chunks_by_member[member].append((time_step, cyclone_ds))
 
                     save_output_xarray(
                         output=chunk,
@@ -332,7 +306,9 @@ class WeatherNext2Base(Model):
         """
         import xarray as xr
 
-        from .cyclones import run_tracker, tracks_to_cyclops, write_cyclops_tarfile
+        from .cyclones import run_tracker
+        from .cyclones import tracks_to_cyclops
+        from .cyclones import write_cyclops_tarfile
 
         with self.timer("Running cyclone tracker"):
             import pandas as pd
@@ -450,8 +426,7 @@ class WeatherNext2Base(Model):
         parser.add_argument(
             "--cyclone-tracks",
             default=None,
-            help="Output cyclone tracks to a TAR file (cyclops format). "
-            "Requires cyclops to be installed.",
+            help="Output cyclone tracks to a TAR file (cyclops format). " "Requires cyclops to be installed.",
         )
         return parser.parse_args(args)
 
