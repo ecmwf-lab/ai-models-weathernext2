@@ -165,7 +165,7 @@ class WeatherNext2Base(Model):
             oper_fcst = True
             self.num_ensemble_members = 1
             self.member_number = [0]
-            self.grib_extra_metadata = {"type": "fc", "stream": "oper"}
+            self.grib_extra_metadata = {"type": "fc"}
 
         if not (self.num_ensemble_members % len(jax.local_devices())) == 0:
             raise ValueError(

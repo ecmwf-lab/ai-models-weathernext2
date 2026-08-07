@@ -140,6 +140,16 @@ def run_tracker(
     )
     data_to_track = data_to_track.as_numpy()
 
+    # When no initial storms, the tracker internally creates pd.DataFrame()
+    # with no columns, then accesses predictions_df['lead_time'] which fails.
+    # Provide an empty DataFrame with the correct schema instead.
+    if initial_storms_df is None:
+        from weathernext.cyclones import constants as _c
+
+        initial_storms_df = pd.DataFrame(
+            columns=[_c.LEAD_TIME, _c.TRACK_ID, _c.LAT, _c.LON]
+        )
+
     try:
         tracks_df = tracker(
             gridded_ds=data_to_track,
